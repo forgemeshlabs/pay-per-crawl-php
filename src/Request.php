@@ -31,7 +31,7 @@ final class Request
 
     public function path(): string
     {
-        $p = parse_url($this->uri, PHP_URL_PATH);
+        $p = parse_url('http://x' . ($this->uri !== '' && $this->uri[0] === '/' ? $this->uri : '/' . $this->uri), PHP_URL_PATH);
         return is_string($p) && $p !== '' ? $p : '/';
     }
 

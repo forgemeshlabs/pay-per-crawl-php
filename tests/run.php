@@ -309,7 +309,16 @@ ok($r->status === 403 && $sb->last()['status'] === 'blocked', 'class policy bloc
 ok(!$go->handle(mkReq('GET', '/p', $UA_G))->respond, 'bot override free beats class paid');
 ok($go->handle(mkReq('GET', '/p', 'curl/8'))->status === 403, 'bot override block');
 [$ga] = mkGate(['allow_paths' => ['/public'], 'exempt_paths' => ['/admin']]);
-ok(!$ga->handle(mkReq('GET', '/public/a', $UA_G))->respond && !$ga->handle(mkReq('GET', '/admin/x', $UA_G))->respond && $ga->handle(mkReq('GET', '/publicity', 'curl/8'))->respond === false, 'allow_paths and exempt_paths prefixes');
+ok(!$ga->handle(mkReq('GET', '/public/a', $UA_G))->respond && !$ga->handle(mkReq('GET', '/public', $UA_G))->respond && !$ga->handle(mkReq('GET', '/admin/x', $UA_G))->respond, 'allow_paths and exempt_paths match on segment boundaries');
+ok($ga->handle(mkReq('GET', '/publicity', 'curl/8'))->respond, 'allow /public does not exempt /publicity');
+[$gp] = mkGate(['allow_paths' => ['/pricing']]);
+ok(!$gp->handle(mkReq('GET', '/pricing/plans', $UA_G))->respond && $gp->handle(mkReq('GET', '/pricing-secret', $UA_G))->status === 402, 'allow /pricing exempts /pricing/plans but gates /pricing-secret');
+foreach (['/robots.txt.html', '/robots.txt/x', '/sitemapfoo', '/sitemap/x.xml', '/.well-known/../post', '/.well-known/%2e%2e/post', '/%2e%2e/post', '/llms.txt%2f..', '/.well-known%2fx', '//llms.txt', '/a/../robots.txt', '/./robots.txt', '/favicon.ico.php'] as $evil) {
+    ok($gp->handle(mkReq('GET', $evil, 'curl/8'))->status === 402, "not exempt: $evil");
+}
+foreach (['/robots.txt', '/robots.txt/', '/llms.txt', '/agents.txt', '/favicon.ico', '/sitemap.xml', '/sitemap-posts_1.xml', '/post-sitemap.xml', '/.well-known/x402.json', '/.well-known/security.txt'] as $good) {
+    ok(!$gp->handle(mkReq('GET', $good, 'curl/8'))->respond, "exempt: $good");
+}
 [$gh] = mkGate(['log_humans' => false]);
 $gh->handle(mkReq('GET', '/p', $UA_H, ['accept' => 'text/html']));
 ok(true, 'log_humans=false does not crash');
@@ -327,6 +336,13 @@ ok($h1 !== $st->last()['ip_hash'], 'trusted_ip_header changes the source identit
 $gt->handle(mkReq('GET', '/p', $UA_G, ['cf-connecting-ip' => 'garbage']));
 $gt->handle(mkReq('GET', '/p', $UA_G));
 ok($st->rows[2]['ip_hash'] === $st->rows[3]['ip_hash'], 'invalid trusted header value falls back to REMOTE_ADDR');
+
+// spoofed left-most X-Forwarded-For entry must not buy the search-engine lane
+[$gx2, , $sx2] = mkGate(['trusted_ip_header' => 'X-Forwarded-For']);
+$r = $gx2->handle(mkReq('GET', '/p', $gb, ['x-forwarded-for' => '66.249.66.1, 203.0.113.9'], '10.0.0.1'));
+ok($r->status === 402 && $sx2->last()['ua_class'] === 'automation' && $sx2->last()['verified'] === false, 'XFF: spoofed left-most Googlebot IP is ignored (right-most used)');
+$r = $gx2->handle(mkReq('GET', '/p', $gb, ['x-forwarded-for' => '203.0.113.9, 66.249.66.1'], '10.0.0.1'));
+ok(!$r->respond && $sx2->last()['verified'] === true, 'XFF: proxy-appended right-most Googlebot IP verifies');
 
 // paid v2
 [$g, $http, $store, $cache] = mkGate();

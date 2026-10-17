@@ -17,7 +17,7 @@ final class Gate
     public const VERSION = '0.1.0';
 
     private const NONCE_LOCK_SECONDS = 900;
-    private const ALWAYS_EXEMPT = ['/robots.txt', '/llms.txt', '/agents.txt', '/.well-known/', '/favicon.ico', '/sitemap'];
+    private const EXACT_EXEMPT = ['/robots.txt', '/llms.txt', '/agents.txt', '/favicon.ico'];
 
     /** @var array<string,mixed> */
     private array $s;
@@ -42,16 +42,66 @@ final class Gate
         return $this->s;
     }
 
+    /**
+     * Exemptions are anchored: exact files, a sitemap regex, /.well-known/ as a directory, and
+     * user prefixes only on a path-segment boundary. Anything that needs normalising (dot
+     * segments, doubled slashes) or carries an encoded slash or dot is never exempt, so
+     * "/.well-known/../post" or "/robots.txt.html" cannot buy a free read.
+     */
     public function isExempt(Request $req): bool
     {
-        $path = $req->path();
-        foreach (array_merge(self::ALWAYS_EXEMPT, $this->s['exempt_paths'], $this->s['allow_paths']) as $p) {
-            $p = trim((string) $p);
-            if ($p !== '' && str_starts_with($path, $p)) {
+        $raw = $req->path();
+        if (preg_match('/%2[fe]/i', $raw)) {
+            return false;
+        }
+        $path = self::normalizePath($raw);
+        if (rtrim($path, '/') !== rtrim($raw, '/')) {
+            return false;
+        }
+        $bare = rtrim($path, '/') === '' ? '/' : rtrim($path, '/');
+        if (in_array($bare, self::EXACT_EXEMPT, true)) {
+            return true;
+        }
+        if (preg_match('#^/[a-z0-9_-]*sitemap[a-z0-9_-]*\.xml$#', $bare)) {
+            return true;
+        }
+        if (str_starts_with($path, '/.well-known/')) {
+            return true;
+        }
+        foreach (array_merge($this->s['exempt_paths'], $this->s['allow_paths']) as $p) {
+            $p = rtrim(trim((string) $p), '/');
+            if ($p === '') {
+                continue;
+            }
+            if ($bare === $p || str_starts_with($path, $p . '/')) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** Resolve "." and ".." segments and doubled slashes the way a web server would. */
+    private static function normalizePath(string $path): string
+    {
+        $out = [];
+        $segments = explode('/', $path);
+        $last = count($segments) - 1;
+        foreach ($segments as $i => $seg) {
+            if ($seg === '' && $i !== 0 && $i !== $last) {
+                $out[] = '';          // keep doubled slashes visible so they register as a change
+                continue;
+            }
+            if ($seg === '.') {
+                continue;
+            }
+            if ($seg === '..') {
+                array_pop($out);
+                continue;
+            }
+            $out[] = $seg;
+        }
+        $n = implode('/', $out);
+        return $n === '' || $n[0] !== '/' ? '/' . ltrim($n, '/') : $n;
     }
 
     public function handle(Request $req): GateResult
@@ -255,9 +305,13 @@ final class Gate
     {
         $ip = $req->ip;
         if ($this->s['trusted_ip_header'] !== '') {
-            $first = trim(explode(',', $req->header($this->s['trusted_ip_header']))[0]);
-            if ($first !== '' && filter_var($first, FILTER_VALIDATE_IP)) {
-                $ip = $first;
+            // Multi-value headers (X-Forwarded-For): the RIGHT-MOST entry is the one our own proxy
+            // appended; everything to its left is client-controlled and could carry a spoofed
+            // Googlebot address. Single-value edge headers (CF-Connecting-IP) have one entry.
+            $parts = array_map('trim', explode(',', $req->header($this->s['trusted_ip_header'])));
+            $last = end($parts);
+            if ($last !== false && $last !== '' && filter_var($last, FILTER_VALIDATE_IP)) {
+                $ip = $last;
             }
         }
         return $ip;
