@@ -1,6 +1,6 @@
 {
     "name": "forgemesh/pay-per-crawl-core",
-    "description": "Framework-free core for ForgeMesh Pay-per-Crawl: charge AI crawlers per page with x402 / MPP USDC micropayments on Base, paid straight to your wallet.",
+    "description": "Bot ledger plus an HTTP 402 price tag: see every AI, SEO and script crawler, keep search engines free, charge x402-capable agents in USDC on Base.",
     "type": "library",
     "license": "MIT",
     "keywords": ["x402", "mpp", "402", "pay-per-crawl", "ai-crawlers", "usdc", "base", "paywall"],
